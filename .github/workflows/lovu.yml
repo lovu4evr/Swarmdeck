@@ -7,11 +7,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -19,36 +18,33 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      # Fixed: use v4 (v3 is broken)
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
-          packages: platform-tools
+          packages: 'platform-tools'
 
-      - name: Install required SDK packages
+      - name: Install platform + build-tools
         run: |
-          sdkmanager --install "platforms;android-34" "build-tools;34.0.0"
-          yes | sdkmanager --licenses || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms" || true
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 8.7
+          gradle-version: '8.7'
 
-      - name: Unzip project if needed
+      - name: Prepare project
         run: |
-          if ls *.zip 1> /dev/null 2>&1; then
-            echo "Zip found → extracting..."
+          if ls *.zip 1>/dev/null 2>&1; then
             unzip -o *.zip -d extracted
-            if [ -d extracted/SwarmDeck ]; then
-              cp -a extracted/SwarmDeck/. .
-            else
-              cp -a extracted/. .
-            fi
+            if [ -d extracted/SwarmDeck ]; then cp -a extracted/SwarmDeck/. .; else cp -a extracted/. .; fi
             rm -rf extracted
           fi
           ls -la
-          test -f app/build.gradle.kts || (echo "ERROR: app/build.gradle.kts missing" && exit 1)
+          test -f settings.gradle.kts
+          test -f app/build.gradle.kts
 
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon --stacktrace
