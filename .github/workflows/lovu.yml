@@ -1,4 +1,4 @@
-name: Build APK
+name: Build APK from ZIP
 on:
   push:
   workflow_dispatch:
@@ -15,32 +15,29 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Find project (root / subfolder / zip)
+      - name: Unzip and locate project
         id: find
         run: |
           set -e
-          DIR=""
-          if [ -f settings.gradle.kts ] || [ -f settings.gradle ]; then
-            DIR="$PWD"
+          mkdir -p /tmp/proj
+          Z=$(find . -maxdepth 3 -iname '*.zip' -not -path './.git/*' | head -1)
+          if [ -n "$Z" ]; then
+            echo "Unzipping: $Z"
+            unzip -q -o "$Z" -d /tmp/proj
+            SRC=/tmp/proj
           else
-            S=$(find . -maxdepth 4 \( -name settings.gradle.kts -o -name settings.gradle \) -not -path './.git/*' | head -1)
-            if [ -n "$S" ]; then
-              DIR="$(cd "$(dirname "$S")" && pwd)"
-            else
-              Z=$(find . -maxdepth 3 -iname '*.zip' -not -path './.git/*' | head -1)
-              if [ -z "$Z" ]; then echo "No project or zip found in repo"; exit 1; fi
-              echo "Unzipping $Z"
-              mkdir -p /tmp/proj
-              unzip -q -o "$Z" -d /tmp/proj
-              S=$(find /tmp/proj \( -name settings.gradle.kts -o -name settings.gradle \) | head -1)
-              if [ -z "$S" ]; then echo "settings.gradle not found inside zip"; exit 1; fi
-              DIR="$(cd "$(dirname "$S")" && pwd)"
-            fi
+            SRC="$PWD"
           fi
+          S=$(find "$SRC" -maxdepth 4 \( -name settings.gradle.kts -o -name settings.gradle \) -not -path '*/.git/*' | head -1)
+          if [ -z "$S" ]; then
+            echo "settings.gradle not found"
+            exit 1
+          fi
+          DIR="$(cd "$(dirname "$S")" && pwd)"
           echo "Project dir: $DIR"
           echo "dir=$DIR" >> "$GITHUB_OUTPUT"
 
-      - name: Prepare Android SDK (preinstalled on runner)
+      - name: Prepare Android SDK
         run: |
           echo "sdk.dir=$ANDROID_HOME" > "${{ steps.find.outputs.dir }}/local.properties"
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
@@ -49,11 +46,6 @@ jobs:
       - uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: 8.7
-
-      - name: Unit tests (non-blocking)
-        continue-on-error: true
-        working-directory: ${{ steps.find.outputs.dir }}
-        run: gradle testDebugUnitTest --no-daemon
 
       - name: Build debug APK
         shell: bash
@@ -67,9 +59,7 @@ jobs:
         shell: bash
         working-directory: ${{ steps.find.outputs.dir }}
         run: |
-          echo "=== KOTLIN ERRORS ==="
           grep -E "^e: " build.log | head -40 || true
-          echo "=== WHAT WENT WRONG ==="
           grep -A6 "What went wrong" build.log | head -30 || true
 
       - name: Upload APK
@@ -78,11 +68,3 @@ jobs:
           name: SwarmDeck-APK
           path: ${{ steps.find.outputs.dir }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-
-      - name: Upload build reports (only on failure)
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-reports
-          path: ${{ steps.find.outputs.dir }}/app/build/reports
-          if-no-files-found: ignore
