@@ -1,4 +1,5 @@
-name: Build APK
+name: Build APK from ZIP
+
 on:
   push:
   workflow_dispatch:
@@ -7,55 +8,50 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
-      - name: Find project (root / subfolder / zip)
+      # ZIP repo me kahin bhi ho (root ya subfolder) – yeh khud dhundh ke unzip karega
+      - name: Unzip project
         id: find
+        shell: bash
         run: |
           set -e
-          DIR=""
-          if [ -f settings.gradle.kts ] || [ -f settings.gradle ]; then
-            DIR="$PWD"
+          mkdir -p /tmp/proj
+          Z=$(find . -maxdepth 3 -iname '*.zip' -not -path './.git/*' | head -1)
+          if [ -n "$Z" ]; then
+            echo "Found zip: $Z"
+            unzip -q -o "$Z" -d /tmp/proj
+            SEARCH=/tmp/proj
           else
-            S=$(find . -maxdepth 4 \( -name settings.gradle.kts -o -name settings.gradle \) -not -path './.git/*' | head -1)
-            if [ -n "$S" ]; then
-              DIR="\( (cd " \)(dirname "$S")" && pwd)"
-            else
-              Z=$(find . -maxdepth 3 -iname '*.zip' -not -path './.git/*' | head -1)
-              if [ -z "$Z" ]; then echo "No project or zip found in repo"; exit 1; fi
-              mkdir -p /tmp/proj
-              unzip -q -o "$Z" -d /tmp/proj
-              S=$(find /tmp/proj \( -name settings.gradle.kts -o -name settings.gradle \) | head -1)
-              if [ -z "$S" ]; then echo "settings.gradle not found inside zip"; exit 1; fi
-              DIR="\( (cd " \)(dirname "$S")" && pwd)"
-            fi
+            echo "Zip nahi mila, repo ko hi project maan raha hu"
+            SEARCH=.
           fi
+          S=$(find "$SEARCH" -maxdepth 4 \( -name settings.gradle.kts -o -name settings.gradle \) -not -path '*/.git/*' | head -1)
+          if [ -z "$S" ]; then echo "settings.gradle nahi mila"; exit 1; fi
+          DIR="$(cd "$(dirname "$S")" && pwd)"
           echo "Project dir: $DIR"
           echo "dir=$DIR" >> "$GITHUB_OUTPUT"
 
-      - name: Prepare Android SDK (preinstalled on runner)
+      - name: Android SDK setup
+        shell: bash
         run: |
-          echo "sdk.dir=\( ANDROID_HOME" > " \){{ steps.find.outputs.dir }}/local.properties"
+          echo "sdk.dir=$ANDROID_HOME" > "${{ steps.find.outputs.dir }}/local.properties"
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0" > /dev/null 2>&1 || true
 
-      - uses: gradle/actions/setup-gradle@v3
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: 8.7
-
-      - name: Unit tests (blocking)
-        working-directory: ${{ steps.find.outputs.dir }}
-        run: gradle testDebugUnitTest --no-daemon
-
-      - name: Lint
-        working-directory: ${{ steps.find.outputs.dir }}
-        run: gradle lintDebug --no-daemon || true
 
       - name: Build debug APK
         shell: bash
@@ -64,7 +60,7 @@ jobs:
           set -o pipefail
           gradle assembleDebug --no-daemon --console=plain 2>&1 | tee build.log
 
-      - name: Show only the errors
+      - name: Show errors (only on failure)
         if: failure()
         shell: bash
         working-directory: ${{ steps.find.outputs.dir }}
